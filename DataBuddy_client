@@ -1,0 +1,74 @@
+#include <WiFi.h>
+#include <esp_now.h>
+
+struct Msg {
+  uint32_t counter;
+  uint32_t ms;
+  char text[24];
+};
+
+uint32_t txCount = 0;
+volatile uint32_t rxCount = 0;
+unsigned long lastSend = 0;
+
+// ✅ Updated callback signatures for ESP32 core 3.3.x
+void onSend(const esp_now_send_info_t *info, esp_now_send_status_t status) {
+  // Optional: inspect info->peer_addr if needed
+}
+
+void onRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+  rxCount++;
+  if (len >= (int)sizeof(Msg)) {
+    Msg in;
+    memcpy(&in, incomingData, sizeof(Msg));
+    Serial.print("[CLIENT] got: #");
+    Serial.print(in.counter);
+    Serial.print(" @"); Serial.print(in.ms);
+    Serial.print(" text="); Serial.println(in.text);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+  unsigned long t0 = millis();
+  while (!Serial && millis() - t0 < 4000) {}
+
+  Serial.println("\n[CLIENT] XIAO ESP32C6 ESP-NOW Client starting…");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed! Press RST.");
+    while (true) { delay(1000); }
+  }
+
+  esp_now_register_send_cb(onSend);
+  esp_now_register_recv_cb(onRecv);
+
+  // Add broadcast peer so host sees our first PING
+  esp_now_peer_info_t peer = {};
+  memset(peer.peer_addr, 0xFF, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  if (!esp_now_is_peer_exist(peer.peer_addr)) {
+    esp_now_add_peer(&peer);
+  }
+
+  Serial.print("CLIENT WiFi STA MAC: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void loop() {
+  if (millis() - lastSend >= 1000) {
+    lastSend = millis();
+    Msg out;
+    out.counter = ++txCount;
+    out.ms = millis();
+    snprintf(out.text, sizeof(out.text), "PING %lu", (unsigned long)txCount);
+    uint8_t bcast[6]; memset(bcast, 0xFF, 6);
+    esp_now_send(bcast, (uint8_t*)&out, sizeof(out));
+    Serial.print("[CLIENT] sent PING #"); Serial.println(txCount);
+  }
+}
