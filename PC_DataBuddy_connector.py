@@ -1,21 +1,29 @@
 import sys
-import pandas as pd
+
+try:
+    from bluetooth import discover_devices, BluetoothError
+except ImportError:
+    print("pybluez not installed. Please run: pip install pybluez")
+    sys.exit(1)
+
+def scan_bluetooth_devices():
+    print("Scanning for Bluetooth devices...")
+    try:
+        devices = discover_devices(duration=8, lookup_names=True)
+        if not devices:
+            print("No Bluetooth devices found. Make sure Bluetooth is enabled and you have permissions.")
+        else:
+            print(f"Found {len(devices)} devices:")
+            for addr, name in devices:
+                print(f"  {name} [{addr}]")
+    except BluetoothError as e:
+        print(f"Bluetooth error: {e}")
+        print("Try running with elevated permissions (e.g., 'Run as Administrator').")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python DataBuddy.py <csv_file>")
-        sys.exit(1)
-    
-    csv_file = sys.argv[1]
-    try:
-        data = pd.read_csv(csv_file)
-        print(f"Loaded {csv_file}. Shape: {data.shape}")
-        print("First 5 rows:")
-        print(data.head())
-        print("\nColumn stats:")
-        print(data.describe(include='all'))
-    except Exception as e:
-        print(f"Error loading {csv_file}: {e}")
+    scan_bluetooth_devices()
 
 if __name__ == "__main__":
     main()
