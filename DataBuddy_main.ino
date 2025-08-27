@@ -122,7 +122,7 @@ float getStepSize(unsigned long speedMillis) {
 void setup() {
   pinMode(ENCODER_SW, INPUT_PULLUP);
   Serial.begin(9600);
-  while (!Serial);
+  
 
   Serial1.begin(115200); // For sensor mode RX from ESP32-C6
 
