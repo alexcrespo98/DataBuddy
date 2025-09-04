@@ -14,25 +14,84 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define ENCODER_SW 4
 Encoder knob(ENCODER_DT, ENCODER_CLK);
 
-enum State {
-  MENU,
-  CONFIG_ROWS,
-  CONFIG_COLS,
-  CONFIG_TIMER,
-  CONFIG_BEGIN,
-  LOG_WAIT,
-  LOG_ENTRY,
-  LOG_DONE,
-  CONFIRM_UNDO,
-  SENSOR_MODE,
-  SENSOR_CONFIG_TIME,
-  SENSOR_WAIT_START,
-  SENSOR_RECORDING,
-  SENSOR_DONE,
-  SENSOR_NOTAVAIL,
-  SD_ERROR
-};
-State state = MENU;
+// --- BATTERY MONITOR ---
+#define BATTERY_PIN 23  // Teensy 3.6 A9
+#define BAT_R1 2700.0   // Ohms
+#define BAT_R2 10000.0  // Ohms
+#define BAT_VOLTAGE_FULL 4.2  // V
+#define BAT_VOLTAGE_EMPTY 3.0 // V
+
+#define BATTERY_SAMPLES 10  // Number of samples for smoothing
+#define BATTERY_UPDATE_THRESHOLD 2  // Only update display if % changes by > this value
+
+float batterySamples[BATTERY_SAMPLES];
+int batterySampleIndex = 0;
+bool batteryBufferFilled = false;
+int lastDisplayedPercent = -1;
+
+// ---- Battery Functions ----
+float readRawBatteryVoltage() {
+  int raw = analogRead(BATTERY_PIN);
+  float vRef = 3.3;
+  float vDiv = (raw / 1023.0) * vRef;
+  float vBat = vDiv * ((BAT_R1 + BAT_R2) / BAT_R2);
+  return vBat;
+}
+
+// Call this as often as you want to update the buffer
+void updateBatteryBuffer() {
+  float v = readRawBatteryVoltage();
+  batterySamples[batterySampleIndex++] = v;
+  if (batterySampleIndex >= BATTERY_SAMPLES) {
+    batterySampleIndex = 0;
+    batteryBufferFilled = true;
+  }
+}
+
+// Get average battery voltage from buffer
+float getSmoothedBatteryVoltage() {
+  int count = batteryBufferFilled ? BATTERY_SAMPLES : batterySampleIndex;
+  if (count == 0) return 0;
+  float sum = 0;
+  for (int i = 0; i < count; i++) sum += batterySamples[i];
+  return sum / count;
+}
+
+// Returns % battery (0-100), or -1 if reading is implausible (no battery)
+int batteryPercent() {
+  float v = getSmoothedBatteryVoltage();
+  if (v < 0.5 || v > 5.5) return -1;
+  if (v >= BAT_VOLTAGE_FULL) return 100;
+  if (v <= BAT_VOLTAGE_EMPTY) return 0;
+  return (int)(((v - BAT_VOLTAGE_EMPTY) / (BAT_VOLTAGE_FULL - BAT_VOLTAGE_EMPTY)) * 100.0);
+}
+
+// Draws battery at top right, with smoothing
+void drawBatteryIndicator() {
+  int percent = batteryPercent();
+  // Only update if change > threshold, or if never displayed
+  if (lastDisplayedPercent < 0 || (percent >= 0 && abs(percent - lastDisplayedPercent) > BATTERY_UPDATE_THRESHOLD)) {
+    lastDisplayedPercent = percent;
+  }
+  int bx = SCREEN_WIDTH - 24;
+  int by = 0;
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.drawRect(bx, by, 20, 8, SSD1306_WHITE);
+  display.fillRect(bx + 20, by + 2, 2, 4, SSD1306_WHITE); // terminal
+  int fillWidth = 2;
+  if (lastDisplayedPercent >= 0)
+    fillWidth = map(lastDisplayedPercent, 0, 100, 2, 18);
+  display.fillRect(bx + 1, by + 1, fillWidth, 6, SSD1306_WHITE);
+  display.setCursor(bx - 18, by);
+  if (lastDisplayedPercent < 0) {
+    display.print("--%");
+  } else {
+    display.print(String(lastDisplayedPercent) + "%");
+  }
+}
+
+// ---- End Battery ----
 
 // Menu data
 const char* menuItems[] = { "Basic mode", "Sensor mode" };
@@ -83,22 +142,6 @@ void printCentered(const char* text, int y, int tsize) {
   display.print(text);
 }
 
-void printMenuItem(const char* text, int selected) {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  printCentered(text, 18, 2);
-  display.setTextSize(1);
-  if (selected > 0) {
-    display.setCursor(SCREEN_WIDTH/2-3, 2);
-    display.print("^");
-  }
-  if (selected < menuLength-1) {
-    display.setCursor(SCREEN_WIDTH/2-3, SCREEN_HEIGHT-10);
-    display.print("v");
-  }
-  display.display();
-}
-
 // Helper for column names
 void buildCSVHeader(char* header, int numCols) {
   header[0] = 0;
@@ -119,12 +162,30 @@ float getStepSize(unsigned long speedMillis) {
   return 0.01;
 }
 
+enum State {
+  MENU,
+  CONFIG_ROWS,
+  CONFIG_COLS,
+  CONFIG_TIMER,
+  CONFIG_BEGIN,
+  LOG_WAIT,
+  LOG_ENTRY,
+  LOG_DONE,
+  CONFIRM_UNDO,
+  SENSOR_MODE,
+  SENSOR_CONFIG_TIME,
+  SENSOR_WAIT_START,
+  SENSOR_RECORDING,
+  SENSOR_DONE,
+  SENSOR_NOTAVAIL,
+  SD_ERROR
+};
+State state = MENU;
+
 void setup() {
   pinMode(ENCODER_SW, INPUT_PULLUP);
   Serial.begin(9600);
-  
-
-  Serial1.begin(115200); // For sensor mode RX from ESP32-C6
+  Serial1.begin(115200);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -140,9 +201,14 @@ void setup() {
   } else {
     Serial.println("SD card initialized and available.");
   }
+  // Pre-fill battery buffer for smooth start
+  for(int i=0;i<BATTERY_SAMPLES;i++) updateBatteryBuffer();
 }
 
 void loop() {
+  // Update battery buffer as often as possible for smooth readings
+  updateBatteryBuffer();
+
   switch (state) {
     case MENU:
       menuScreen();
@@ -197,6 +263,7 @@ void loop() {
       display.setTextSize(1);
       display.setCursor(0, 32);
       display.print("Insert SD card");
+      drawBatteryIndicator();
       display.display();
       delay(2000);
       state = MENU;
@@ -204,8 +271,6 @@ void loop() {
   }
 
   // ---- BEGIN DEBUG BLOCK - REMOVE WHEN NOT NEEDED ----
-  // This block will print whatever is received on Serial1 (pin 0) to USB Serial Monitor
-  // You can safely delete these lines when you're done testing!
   if (Serial1.available()) {
     String debugLine = Serial1.readStringUntil('\n');
     debugLine.trim();
@@ -218,6 +283,23 @@ void loop() {
 }
 
 // ---- MENU SCREEN ----
+void printMenuItem(const char* text, int selected) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered(text, 18, 2);
+  display.setTextSize(1);
+  if (selected > 0) {
+    display.setCursor(SCREEN_WIDTH/2-3, 2);
+    display.print("^");
+  }
+  if (selected < menuLength-1) {
+    display.setCursor(SCREEN_WIDTH/2-3, SCREEN_HEIGHT-10);
+    display.print("v");
+  }
+  drawBatteryIndicator();
+  display.display();
+}
+
 void menuScreen() {
   long newPos = knob.read();
   if (newPos != lastEncoderPos) {
@@ -247,6 +329,7 @@ void configRows() {
   display.setTextColor(SSD1306_WHITE);
   printCentered("Set rows:", 0, 2);
   printCentered(String(numRows).c_str(), 32, 2);
+  drawBatteryIndicator();
   display.display();
   if (buttonPressed()) {
     state = CONFIG_COLS;
@@ -258,13 +341,14 @@ void configRows() {
 void configCols() {
   long newPos = knob.read();
   if (newPos != lastEncoderPos) {
-    numCols = constrain(newPos, 1, 10); // let's cap at 10 for OLED clarity
+    numCols = constrain(newPos, 1, 10);
     lastEncoderPos = newPos;
   }
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   printCentered("Set columns:", 0, 2);
   printCentered(String(numCols).c_str(), 32, 2);
+  drawBatteryIndicator();
   display.display();
   if (buttonPressed()) {
     state = CONFIG_TIMER;
@@ -276,7 +360,7 @@ void configCols() {
 void configTimer() {
   long newPos = knob.read();
   if (newPos != lastEncoderPos) {
-    float val = constrain(newPos, 1, 10000); // up to 100 min
+    float val = constrain(newPos, 1, 10000);
     timeBetweenRows = val / 100.0;
     lastEncoderPos = newPos;
   }
@@ -284,6 +368,7 @@ void configTimer() {
   display.setTextColor(SSD1306_WHITE);
   printCentered("Time/log (min):", 0, 2);
   printCentered(String(timeBetweenRows, 2).c_str(), 32, 2);
+  drawBatteryIndicator();
   display.display();
   if (buttonPressed()) {
     state = CONFIG_BEGIN;
@@ -298,6 +383,7 @@ void configBegin() {
   printCentered(("interval: " + String(timeBetweenRows,2) + " min").c_str(), 16, 1);
   display.setTextSize(2);
   printCentered("Press to begin!", 32, 2);
+  drawBatteryIndicator();
   display.display();
 
   if (buttonPressed()) {
@@ -307,7 +393,6 @@ void configBegin() {
     } else {
       logFile = SD.open(logFilename, FILE_WRITE);
       if (logFile) {
-        // Write header: column names
         char header[128] = "";
         buildCSVHeader(header, numCols);
         logFile.print(header); logFile.print("\n");
@@ -318,7 +403,7 @@ void configBegin() {
         state = SD_ERROR;
       }
       currentRow = 1;
-      logWaitMillis = (unsigned long)(timeBetweenRows * 60000); // min to ms
+      logWaitMillis = (unsigned long)(timeBetweenRows * 60000);
       logStartTime = millis();
       editingCol = 0;
       valueEntryActive = false;
@@ -341,6 +426,7 @@ void logWait() {
   printCentered((String(remain / 60000.0,2) + " min").c_str(), 32, 2);
   display.setTextSize(1);
   printCentered(("Progress: " + String(currentRow) + "/" + String(numRows)).c_str(), 56, 1);
+  drawBatteryIndicator();
   display.display();
 
   if (buttonPressed()) {
@@ -390,6 +476,7 @@ void logEntry() {
     } else {
       printCentered("Press: log entry", 56, 1);
     }
+    drawBatteryIndicator();
     display.display();
 
     if (buttonPressed()) {
@@ -405,7 +492,6 @@ void logEntry() {
     return;
   }
 
-  // All values entered, log them
   if (!valueEntryActive) {
     if (sdAvailable && logFile) {
       for (int i = 0; i < numCols; i++) {
@@ -423,6 +509,7 @@ void logEntry() {
     display.setTextColor(SSD1306_WHITE);
     display.setTextSize(2);
     printCentered(("Logged! " + String(currentRow) + "/" + String(numRows)).c_str(), 16, 2);
+    drawBatteryIndicator();
     display.display();
     delay(1000);
 
@@ -439,7 +526,6 @@ void logEntry() {
     return;
   }
 
-  // Double-tap to go back, only if just logged previous entry
   if (justLogged && doubleClickDetected()) {
     state = CONFIRM_UNDO;
     return;
@@ -455,6 +541,7 @@ void confirmUndo() {
   display.setTextSize(1);
   printCentered("Deletes last entry.", 40, 1);
   printCentered("Press: Yes", 56, 1);
+  drawBatteryIndicator();
   display.display();
 
   if (buttonPressed()) {
@@ -488,6 +575,7 @@ void logDone() {
   printCentered("Complete!", 32, 2);
   display.setTextSize(1);
   printCentered("Returning to menu...", 56, 1);
+  drawBatteryIndicator();
   display.display();
   delay(2000);
   state = MENU;
@@ -499,13 +587,14 @@ void logDone() {
 void sensorModeConfigTime() {
   long newPos = knob.read();
   if (newPos != lastEncoderPos) {
-    sensorDuration = constrain(newPos, 1, 600) * 1000; // seconds to ms
+    sensorDuration = constrain(newPos, 1, 600) * 1000;
     lastEncoderPos = newPos;
   }
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   printCentered("Duration (s):", 0, 2);
   printCentered(String(sensorDuration/1000).c_str(), 32, 2);
+  drawBatteryIndicator();
   display.display();
   if (buttonPressed()) {
     state = SENSOR_WAIT_START;
@@ -516,9 +605,9 @@ void sensorModeWaitStart() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   printCentered("Press to start", 16, 2);
+  drawBatteryIndicator();
   display.display();
   if (buttonPressed()) {
-    // Open log file, prepare for logging
     if (!sdAvailable) {
       state = SD_ERROR;
       return;
@@ -546,12 +635,12 @@ void sensorModeRecording() {
   display.setTextSize(1);
   printCentered(("Time left: " + String((sensorDuration-elapsed)/1000) + "s").c_str(), 32, 1);
   printCentered(("Logged: " + String(sensorRow)).c_str(), 48, 1);
-  // Display the latest temp readings at the bottom
   if (lastSensorLine.length() > 0) {
     display.setCursor(0, 56);
     display.print("Last: ");
     display.print(lastSensorLine.c_str());
   }
+  drawBatteryIndicator();
   display.display();
 
   if (elapsed >= sensorDuration) {
@@ -565,19 +654,16 @@ void sensorModeRecording() {
     String line = Serial1.readStringUntil('\n');
     line.trim();
     if (line.length() > 0) {
-      // Write header on first line
       if (!sensorHeaderWritten) {
         logFile.print("timestamp,temp1,temp2\n");
         sensorHeaderWritten = true;
       }
-      logFile.print(String(millis())); // timestamp
+      logFile.print(String(millis()));
       logFile.print(",");
-      logFile.print(line); // temp values from ESP32-C6, e.g. "23.5,24.1"
+      logFile.print(line);
       logFile.print("\n");
       logFile.flush();
       sensorRow++;
-
-      // Store last received line for display
       lastSensorLine = line;
     }
   }
@@ -588,6 +674,7 @@ void sensorModeDone() {
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(2);
   printCentered("Sensor log done", 16, 2);
+  drawBatteryIndicator();
   display.display();
   delay(2000);
   state = MENU;
@@ -604,6 +691,7 @@ void sensorNotAvailable() {
   printCentered("yet!", 28, 2);
   display.setTextSize(1);
   printCentered("Double-click to exit", 54, 1);
+  drawBatteryIndicator();
   display.display();
   if (doubleClickDetected()) {
     state = MENU;
@@ -618,7 +706,7 @@ bool buttonPressed() {
   bool cur = digitalRead(ENCODER_SW);
   if (prev == HIGH && cur == LOW) {
     prev = cur;
-    delay(200); // debounce
+    delay(200);
     return true;
   }
   prev = cur;
@@ -629,7 +717,7 @@ bool doubleClickDetected() {
   static int clicks = 0;
   bool cur = digitalRead(ENCODER_SW);
   if (cur == LOW) {
-    if (millis() - lastTime > 200) { // debounce
+    if (millis() - lastTime > 200) {
       clicks++;
       lastTime = millis();
     }
