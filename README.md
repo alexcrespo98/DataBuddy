@@ -125,9 +125,3 @@ DataBuddy is a Teensy 3.6-based hardware and software platform for flexible, int
 - Data visualization on OLED or via Python script.
 - Web dashboard for remote monitoring.
 
----
-
-
----
-
-Let me know if you want to break any of these down further or need code samples for specific tasks!
