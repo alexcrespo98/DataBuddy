@@ -1,0 +1,29 @@
+# DataBuddy Check Test Mode Config File
+# Place this file on SD card next to datalog.csv
+#
+# Format:
+# Valve,TestType,Columns,Rows,TimeBetweenRows_minutes
+# Example:
+# LF909,Backpressure,1,1,60
+# LF909,TK9,1,20,4
+# LF909,Water_column,1,10,10
+# 825Y,Backpressure,1,1,60
+# 825Y,TK9,1,20,4
+# 825Y,Water_column,1,10,10
+# 975XL2,Backpressure,1,1,60
+# 975XL2,TK9,1,20,4
+# 975XL2,Water_column,1,10,10
+# 975XL3,TK9,1,20,4
+# 975XL3,Water_column,1,10,10
+
+LF909,Backpressure,1,1,60
+LF909,TK9,1,20,4
+LF909,Water_column,1,10,10
+825Y,Backpressure,1,1,60
+825Y,TK9,1,20,4
+825Y,Water_column,1,10,10
+975XL2,Backpressure,1,1,60
+975XL2,TK9,1,20,4
+975XL2,Water_column,1,10,10
+975XL3,TK9,1,20,4
+975XL3,Water_column,1,10,10
