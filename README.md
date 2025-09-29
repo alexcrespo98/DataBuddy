@@ -1,127 +1,117 @@
 # DataBuddy
 
-## To-Do / Roadmap
-
-### Robustness & Reliability
-
-- [ ] **Investigate and fix freezing issues**
-  - Add debug printouts to localize freeze causes (SD card, serial, etc.).
-  - Implement a watchdog timer to auto-recover from hangs.
-  - Add timeouts/checks on SD and serial operations.
-  - Test with multiple SD cards and ensure good power supply.
-
-- [ ] **Graceful recovery after power loss**
-  - Implement a checkpoint system: periodically save current state (mode, file, position) to SD or EEPROM.
-  - On startup, detect if a checkpoint exists and offer to resume.
-  - Ensure files are flushed/closed after each write to minimize data loss.
-
-### Modes & Features
-
-- [ ] **Current Modes**
-  - Basic mode: manual data entry via rotary encoder.
-  - Sensor mode: capture and log serial data from external TX pin.
-
-- [ ] **Sensor Input Expansion**
-  - Plan to support digital, analog, and serial data collection from a single pin (or selectable pin).
-  - Consider using analogRead, digitalRead, and Serial in parallel with a mode selector.
-  - If needed, add an additional pin to separate analog/digital from serial to avoid conflicts.
-  - Standardize pin assignments and document them clearly.
-
-- [ ] **Standardization and Ease-of-Use**
-  - Develop clear menu/UI for selecting sensor type and pin.
-  - Document pinout and usage for all supported modes.
-
-### Stretch / Future Goals
-
-- [ ] Support logging from multiple input types simultaneously.
-- [ ] Expand file format support (CSV, JSON, etc.).
-- [ ] Optional: Add BLE or WiFi for wireless syncing.
-- [ ] Data visualization on OLED or via a Python script.
+**DataBuddy** is a versatile Teensy-based data logging tool designed for sensor, manual entry, and valve test logging. It features an OLED display, rotary encoder for navigation and value entry, SD card data storage, and an optional battery monitoring system. DataBuddy is ideal for scientific experiments, industrial tests, or any process that requires easy, flexible logging.
 
 ---
 
-**Current Hardware & Operation**
+## Features
 
-DataBuddy is a Teensy 3.6-based hardware and software platform for flexible, interactive data logging. It supports two main operating modes: **Basic** (manual input) and **Sensor** (serial data stream capture). The device interacts with users via a rotary encoder and OLED display, and stores/transfers data using the Teensy’s onboard microSD card. DataBuddy is designed to interface with any microcontroller’s TX pin for serial data streaming, making it adaptable to a wide range of sensor or embedded applications.
-
----
-
-### Major Functional Blocks
-
-#### Hardware Integration
-- **Teensy 3.6 microcontroller**
-- **Rotary Encoder** (for navigating/selecting values and actions, with click/double/triple click detection)
-- **0.96" OLED Display** (for menus, timers, feedback, and prompts)
-- **Onboard microSD Card** (for file storage and plug-and-play data transfer)
-- **Serial Interface** (connects to TX pin of any microcontroller for sensor mode)
-
-#### Firmware/Embedded Software (Teensy)
-- **User Interface**
-  - OLED displays menus, prompts, timers, confirmations.
-  - Rotary encoder handles navigation, value selection, and click actions.
-- **File System Handling**
-  - Read/write CSV or similar files to the onboard microSD card.
-  - Support for file append, overwrite, and new file creation.
-- **Serial Data Logging (Sensor Mode)**
-  - Listen to incoming data from a designated UART/serial pin.
-  - Capture and log serial data in real time to the microSD card.
-  - Allow configurable baud rate and protocol if needed.
-- **Basic Mode Data Logging**
-  - Prompt user for manual data input via rotary encoder.
-  - Log values at user-defined intervals and structure.
-- **State Machine**
-  - Idle, configuration, logging, confirmation, error handling, abort.
-
-#### Python Host Script (Stored on microSD Card)
-- **User Interaction**
-  - Select or create data files for logging.
-  - Configure logging parameters (mode, interval, file format, etc.).
-- **File Management**
-  - Ensure file consistency and update status.
-  - Prompt user to confirm file sync or retrieve file if issues occur.
+- **OLED Display & Encoder Navigation:** Intuitive user interface with a 128x64 OLED screen and rotary encoder (with push-button).
+- **Menu Modes:**
+  - **Check Test Mode:** Guided logging for multiple valves and tests, loaded from SD card configuration.
+  - **Basic Mode:** Manual entry of values in a table format.
+  - **Sensor Mode:** Automated sensor value logging (customizable).
+- **SD Card Logging:** Data saved in CSV format, readable by spreadsheet software.
+- **Battery Percentage Reader (UI):** Always visible in the corner of the screen. Battery voltage sensing can be enabled or disabled in hardware/software.
+- **Undo Last Log:** Double-click encoder to undo the last entry.
+- **EEPROM Face Easter Egg:** Changes the intro face each boot.
 
 ---
 
-### Detailed Task List
+## Hardware Setup
 
-#### Hardware Bring-Up
-- Assemble Teensy 3.6, rotary encoder, OLED, and microSD interface.
-- Test rotary encoder with click, double, triple click detection.
-- Test OLED menu system.
-- Validate microSD card read/write from Teensy.
-- Test serial data capture from external TX source.
+### Teensy & Display
 
-#### Teensy Firmware Development
-- **File System**: Implement microSD card mounting, file creation, append, and update.
-- **UI State Machine**: Build menu system for configuration, logging, confirmation, error, abort.
-- **Rotary Encoder**: Implement value selection, click/double/triple click logic.
-- **OLED Display**: Develop user prompts, row/column selection, timer display, and status messages.
-- **Serial Logging (Sensor Mode)**: Implement data capture from TX pin, configurable baud rate, and error handling.
-- **Basic Mode Logging**: User-driven data entry with timed or event-based logging.
+- **Microcontroller:** Teensy 3.6 (recommended)
+- **OLED Display:** SSD1306, 128x64 via I2C (`Wire` library)
+- **Rotary Encoder:** DT/CLK pins for increment, SW for push-button
 
-#### Python Host Script Development
-- **User Prompts**: File selection/creation, configuration (mode selection, interval, etc.).
-- **Data Logging**: Option to log data directly on computer or via DataBuddy device.
-- **File Sync**: Monitor file updates, confirm sync status.
-- **Error Handling**: Provide user options if sync fails (manual retrieval, retry, etc.).
+### SD Card
 
-#### Integration & Testing
-- End-to-end test: Python script → configuration → DataBuddy logging → file sync.
-- microSD card: validate file updates between DataBuddy and computer.
-- Serial: test data capture from various microcontroller TX sources.
-- Rotary encoder: ensure reliable input, click detection.
-- OLED: check for clear feedback and user guidance.
+- Uses the onboard SD slot of Teensy 3.6 (or compatible external SD adapter).
 
-#### Documentation
-- System overview and quick-start instructions.
-- Hardware assembly guide.
-- Firmware and Python script usage.
-- Troubleshooting and FAQ.
+---
 
-#### Future/Optional Extensions
-- Add sensor modules (e.g., thermistors, ADCs, digital sensors).
-- Expand file format support (JSON, binary, etc.).
-- Add BLE or WiFi for wireless sync.
-- Data visualization on OLED or via Python script.
-- Web dashboard for remote monitoring.
+### Battery Monitoring (Optional)
 
+- **Voltage Divider:** Connect battery + to analog pin via a resistor divider.
+  - **Resistor Values:** Code is set for **10kΩ (R2)** and **2.7kΩ (R1)**.
+  - **Wiring:** 
+    ```
+    Battery+ ----[2.7kΩ]----+----[10kΩ]---- GND
+                           |
+                        Analog Pin (e.g., A23)
+    ```
+  - **Note:** You mentioned a 10kΩ and 4.7kΩ junction before. In this code, the divider uses 2.7kΩ (R1) and 10kΩ (R2). If you want to revert to 4.7kΩ for R1, update `#define BAT_R1 4700.0` in the code.
+
+- **Battery Status:** Percentage is calculated and displayed in the top-right corner. If battery sense hardware is removed, the UI still shows the percentage for future use, but values will not be accurate until hardware is restored.
+
+---
+
+## Check Test Mode
+
+- **Config File:** `check_test_mode.txt` on SD card
+  - Format: Each line = Valve name, Test type, Columns, Rows, Interval (minutes), [Optional label1], [Optional label2]
+  - Example: `ValveA,Leak,2,10,1.5,Pressure,Flow`
+- **Operation:** Select valve and test, follow prompts to enter values for each row at set intervals.
+
+## Basic Mode
+
+- **Manual Table Entry:** Set rows/columns, enter values using encoder, log to SD.
+
+## Sensor Mode
+
+- **Automated Logging:** Set duration, logs sensor data at fixed intervals (customize with your sensors).
+
+---
+
+## File Structure
+
+- `datalog.csv`: All logged data (with headers and test details).
+- `check_test_mode.txt`: Test configurations for valves.
+
+---
+
+## User Interface
+
+- **Menu Navigation:** Rotate encoder to scroll, press to select.
+- **Value Entry:** Rotate to change value, press to confirm column/log.
+- **Battery %:** Displayed in the corner throughout all screens.
+- **Undo:** Double-click encoder button to undo last log entry.
+
+---
+
+## Customization
+
+- **Battery Divider:** Change resistor values in code and hardware to match your battery configuration.
+- **Sensor Integration:** Add your sensor reading code in the appropriate section of `DataBuddy_main.ino`.
+- **Valve/Test Expansion:** Edit `check_test_mode.txt` for more valves/tests.
+
+---
+
+## Notes
+
+- If SD card is missing, DataBuddy will show an error and return to menu.
+- Battery percentage will read as "--%" if sensing hardware is removed.
+- For full battery monitoring, ensure voltage divider is wired and `BATTERY_PIN` is set correctly in the code.
+- EEPROM is used for intro face rotation; safe to ignore for most users.
+
+---
+
+## Getting Started
+
+1. Wire up the OLED, encoder, and optional battery divider.
+2. Flash the Teensy with `DataBuddy_main.ino`.
+3. Insert SD card, add `check_test_mode.txt` if using Check Test Mode.
+4. Power on and follow the on-screen prompts!
+
+---
+
+## License
+
+MIT
+
+---
+
+**Questions or need customization?**  
+Open an issue in [DataBuddy GitHub](https://github.com/alexcrespo98/DataBuddy) or contact the repo owner.
