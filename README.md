@@ -1,6 +1,6 @@
 # DataBuddy
 
-**DataBuddy** is a versatile Teensy-based data logging tool designed for sensor, manual entry, and valve test logging. It features an OLED display, rotary encoder for navigation and value entry, SD card data storage, and an optional battery monitoring system. DataBuddy is ideal for scientific experiments, industrial tests, or any process that requires easy, flexible logging.
+**DataBuddy** is a versatile Teensy-based data logging tool designed for sensor, manual entry, and valve test logging. It features an OLED display, rotary encoder for navigation and value entry, SD card data storage, and an optional battery monitoring system. DataBuddy makes any repeated data logging activity more efficient and is modular for different testing protocols.
 
 ---
 
@@ -14,7 +14,7 @@
 - **SD Card Logging:** Data saved in CSV format, readable by spreadsheet software.
 - **Battery Percentage Reader (UI):** Always visible in the corner of the screen. Battery voltage sensing can be enabled or disabled in hardware/software.
 - **Undo Last Log:** Double-click encoder to undo the last entry.
-- **EEPROM Face Easter Egg:** Changes the intro face each boot.
+
 
 ---
 
@@ -42,7 +42,6 @@
                            |
                         Analog Pin (e.g., A23)
     ```
-  - **Note:** You mentioned a 10kΩ and 4.7kΩ junction before. In this code, the divider uses 2.7kΩ (R1) and 10kΩ (R2). If you want to revert to 4.7kΩ for R1, update `#define BAT_R1 4700.0` in the code.
 
 - **Battery Status:** Percentage is calculated and displayed in the top-right corner. If battery sense hardware is removed, the UI still shows the percentage for future use, but values will not be accurate until hardware is restored.
 
@@ -84,7 +83,7 @@
 ## Customization
 
 - **Battery Divider:** Change resistor values in code and hardware to match your battery configuration.
-- **Sensor Integration:** Add your sensor reading code in the appropriate section of `DataBuddy_main.ino`.
+- **Sensor Integration:** Add your sensor using the signal (yellow) and ground (blue). Have it post a comma seperated list and the DataBuddy will enter it in a CSV file.
 - **Valve/Test Expansion:** Edit `check_test_mode.txt` for more valves/tests.
 
 ---
@@ -94,7 +93,6 @@
 - If SD card is missing, DataBuddy will show an error and return to menu.
 - Battery percentage will read as "--%" if sensing hardware is removed.
 - For full battery monitoring, ensure voltage divider is wired and `BATTERY_PIN` is set correctly in the code.
-- EEPROM is used for intro face rotation; safe to ignore for most users.
 
 ---
 
@@ -107,11 +105,9 @@
 
 ---
 
-## License
 
-MIT
 
 ---
 
 **Questions or need customization?**  
-Open an issue in [DataBuddy GitHub](https://github.com/alexcrespo98/DataBuddy) or contact the repo owner.
+Open an issue in [DataBuddy GitHub](https://github.com/alexcrespo98/DataBuddy) or contact your boy Alex.
