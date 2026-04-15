@@ -175,6 +175,7 @@ float turbineP2 = 0.0;
 float turbineFlowHz = 0.0;
 float turbineGenFreqHz = 0.0;
 float turbineVoltage = 0.0;
+// Reserved for future DL24 serial integration; currently logged as blank values.
 float turbineRLoad = -1.0;
 float turbineCurrent = -1.0;
 float turbinePower = -1.0;
@@ -258,7 +259,7 @@ String getNextTurbineFilename() {
       String name = entry.name();
       String lower = name;
       lower.toLowerCase();
-      if (lower.startsWith("turbine_") && lower.endsWith(".csv")) {
+      if (lower.startsWith("turbine_") && lower.endsWith(".csv") && lower.length() >= 17) {
         String numPart = lower.substring(8, 12);
         if (numPart.length() == 4 && isAllDigits(numPart)) {
           int idx = numPart.toInt();
@@ -271,7 +272,8 @@ String getNextTurbineFilename() {
   root.close();
 
   char filename[20];
-  int nextIndex = (maxIndex >= 9999) ? 9999 : (maxIndex + 1);
+  if (maxIndex >= 9999) return "";
+  int nextIndex = maxIndex + 1;
   snprintf(filename, sizeof(filename), "turbine_%04d.csv", nextIndex);
   return String(filename);
 }
@@ -343,6 +345,10 @@ void turbineZeroingScreen() {
       return;
     }
     turbineFilename = getNextTurbineFilename();
+    if (turbineFilename.length() == 0) {
+      state = SD_ERROR;
+      return;
+    }
     logFile = SD.open(turbineFilename.c_str(), FILE_WRITE);
     if (!logFile) {
       state = SD_ERROR;
@@ -383,6 +389,7 @@ void turbineLoggingScreen() {
     if (turbinePower >= 0) logFile.print(turbinePower, 3);
     logFile.println();
     turbineRowCount++;
+    if ((turbineRowCount % 25) == 0) logFile.flush();
   }
 
   if (millis() - turbineLastDisplayMs >= TURBINE_DISPLAY_INTERVAL_MS) {
