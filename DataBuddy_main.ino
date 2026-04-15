@@ -168,6 +168,7 @@ State state = MENU;
 // ---- Turbine Bench ----
 const int TURBINE_ZERO_SAMPLES = 20;
 const unsigned long TURBINE_DISPLAY_INTERVAL_MS = 500;
+const int TURBINE_FLUSH_INTERVAL_ROWS = 25;
 String turbineSerialBuffer = "";
 String turbineFilename = "";
 float turbineP1 = 0.0;
@@ -274,7 +275,7 @@ String getNextTurbineFilename() {
 
   char filename[20];
   if (maxIndex >= 9999) {
-    Serial.println("Turbine file index limit reached (9999).");
+    Serial.println("Turbine file index limit reached (9999). Delete old turbine_*.csv files.");
     return "";
   }
   int nextIndex = maxIndex + 1;
@@ -295,6 +296,7 @@ void turbineIdleScreen() {
   printCentered("TURBINE BENCH", 0, 2);
   printCentered("Remove turbine", 22, 2);
   printCentered("Set flow, press", 44, 2);
+  printCentered("to zero", 54, 1);
   drawBatteryIndicator();
   display.display();
 
@@ -394,7 +396,7 @@ void turbineLoggingScreen() {
     if (turbinePower >= 0) logFile.print(turbinePower, 3);
     logFile.println();
     turbineRowCount++;
-    if ((turbineRowCount % 25) == 0) logFile.flush();
+    if ((turbineRowCount % TURBINE_FLUSH_INTERVAL_ROWS) == 0) logFile.flush();
   }
 
   if (millis() - turbineLastDisplayMs >= TURBINE_DISPLAY_INTERVAL_MS) {
