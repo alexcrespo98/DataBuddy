@@ -190,7 +190,15 @@ unsigned long turbineRowCount = 0;
 bool parseFloatField(const String& field, float& outValue) {
   char* endPtr = nullptr;
   outValue = strtof(field.c_str(), &endPtr);
-  return endPtr != field.c_str() && *endPtr == '\0';
+  return endPtr != field.c_str() && *endPtr == '\0' && isfinite(outValue);
+}
+
+bool isAllDigits(const String& text) {
+  if (text.length() == 0) return false;
+  for (int i = 0; i < text.length(); i++) {
+    if (!isDigit(text.charAt(i))) return false;
+  }
+  return true;
 }
 
 bool parseTurbineLine(String line) {
@@ -250,10 +258,12 @@ String getNextTurbineFilename() {
       String name = entry.name();
       String lower = name;
       lower.toLowerCase();
-      if (lower.startsWith("turbine_") && lower.endsWith(".csv") && lower.length() == 16) {
+      if (lower.startsWith("turbine_") && lower.endsWith(".csv")) {
         String numPart = lower.substring(8, 12);
-        int idx = numPart.toInt();
-        if (idx > maxIndex) maxIndex = idx;
+        if (numPart.length() == 4 && isAllDigits(numPart)) {
+          int idx = numPart.toInt();
+          if (idx > maxIndex) maxIndex = idx;
+        }
       }
     }
     entry.close();
@@ -261,7 +271,8 @@ String getNextTurbineFilename() {
   root.close();
 
   char filename[20];
-  snprintf(filename, sizeof(filename), "turbine_%04d.csv", maxIndex + 1);
+  int nextIndex = (maxIndex >= 9999) ? 9999 : (maxIndex + 1);
+  snprintf(filename, sizeof(filename), "turbine_%04d.csv", nextIndex);
   return String(filename);
 }
 
