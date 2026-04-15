@@ -259,7 +259,7 @@ String getNextTurbineFilename() {
       String name = entry.name();
       String lower = name;
       lower.toLowerCase();
-      if (lower.startsWith("turbine_") && lower.endsWith(".csv") && lower.length() >= 17) {
+      if (lower.startsWith("turbine_") && lower.endsWith(".csv") && lower.length() == 16) {
         String numPart = lower.substring(8, 12);
         if (numPart.length() == 4 && isAllDigits(numPart)) {
           int idx = numPart.toInt();
