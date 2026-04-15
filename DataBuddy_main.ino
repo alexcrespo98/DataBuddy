@@ -53,7 +53,7 @@ ValveConfig valveTable[MAX_VALVES];
 int numValves = 0;
 
 // ---- MENU ----
-const char* menuItems[] = { "Check Test Mode", "Basic mode", "Sensor mode" };
+const char* menuItems[] = { "Check Test Mode", "Basic mode", "Sensor mode", "Turbine Bench" };
 const int menuLength = sizeof(menuItems) / sizeof(menuItems[0]);
 int menuIndex = 0;
 
@@ -157,9 +157,286 @@ enum State {
   CHECK_TEST_INIT,
   CHECK_TEST_WAIT,
   CHECK_TEST_ENTRY,
-  CHECK_TEST_DONE
+  CHECK_TEST_DONE,
+  TURBINE_IDLE,
+  TURBINE_ZEROING,
+  TURBINE_LOGGING,
+  TURBINE_DONE
 };
 State state = MENU;
+
+// ---- Turbine Bench ----
+const int TURBINE_ZERO_SAMPLES = 20;
+const unsigned long TURBINE_DISPLAY_INTERVAL_MS = 500;
+String turbineSerialBuffer = "";
+String turbineFilename = "";
+float turbineP1 = 0.0;
+float turbineP2 = 0.0;
+float turbineFlowHz = 0.0;
+float turbineGenFreqHz = 0.0;
+float turbineVoltage = 0.0;
+float turbineRLoad = -1.0;
+float turbineCurrent = -1.0;
+float turbinePower = -1.0;
+float zeroP1 = 0.0;
+float zeroP2 = 0.0;
+float zeroSumP1 = 0.0;
+float zeroSumP2 = 0.0;
+int zeroSampleCount = 0;
+bool turbineZeroReady = false;
+unsigned long turbineLastDisplayMs = 0;
+unsigned long turbineRowCount = 0;
+
+bool parseFloatField(const String& field, float& outValue) {
+  char* endPtr = nullptr;
+  outValue = strtof(field.c_str(), &endPtr);
+  return endPtr != field.c_str() && *endPtr == '\0';
+}
+
+bool parseTurbineLine(String line) {
+  line.trim();
+  if (line.length() == 0) return false;
+
+  float values[5];
+  int start = 0;
+  for (int i = 0; i < 5; i++) {
+    int commaIdx = line.indexOf(',', start);
+    String token;
+    if (i < 4) {
+      if (commaIdx < 0) return false;
+      token = line.substring(start, commaIdx);
+      start = commaIdx + 1;
+    } else {
+      if (commaIdx >= 0) return false;
+      token = line.substring(start);
+    }
+    token.trim();
+    if (!parseFloatField(token, values[i])) return false;
+  }
+
+  turbineP1 = values[0];
+  turbineP2 = values[1];
+  turbineFlowHz = values[2];
+  turbineGenFreqHz = values[3];
+  turbineVoltage = values[4];
+  return true;
+}
+
+bool readSerial1Line(String& outLine) {
+  while (Serial1.available()) {
+    char c = (char)Serial1.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      outLine = turbineSerialBuffer;
+      turbineSerialBuffer = "";
+      outLine.trim();
+      if (outLine.length() > 0) return true;
+      continue;
+    }
+    turbineSerialBuffer += c;
+  }
+  return false;
+}
+
+String getNextTurbineFilename() {
+  int maxIndex = 0;
+  File root = SD.open("/");
+  if (!root) return "turbine_0001.csv";
+
+  while (true) {
+    File entry = root.openNextFile();
+    if (!entry) break;
+    if (!entry.isDirectory()) {
+      String name = entry.name();
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.startsWith("turbine_") && lower.endsWith(".csv") && lower.length() == 16) {
+        String numPart = lower.substring(8, 12);
+        int idx = numPart.toInt();
+        if (idx > maxIndex) maxIndex = idx;
+      }
+    }
+    entry.close();
+  }
+  root.close();
+
+  char filename[20];
+  snprintf(filename, sizeof(filename), "turbine_%04d.csv", maxIndex + 1);
+  return String(filename);
+}
+
+void resetTurbineZeroing() {
+  zeroSumP1 = 0.0;
+  zeroSumP2 = 0.0;
+  zeroSampleCount = 0;
+  turbineZeroReady = false;
+}
+
+void turbineIdleScreen() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("TURBINE BENCH", 0, 2);
+  printCentered("Remove turbine", 22, 2);
+  printCentered("Set flow, press", 44, 2);
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    resetTurbineZeroing();
+    turbineSerialBuffer = "";
+    state = TURBINE_ZEROING;
+  }
+}
+
+void turbineZeroingScreen() {
+  String line;
+  while (readSerial1Line(line)) {
+    if (parseTurbineLine(line)) {
+      if (!turbineZeroReady && zeroSampleCount < TURBINE_ZERO_SAMPLES) {
+        zeroSumP1 += turbineP1;
+        zeroSumP2 += turbineP2;
+        zeroSampleCount++;
+        if (zeroSampleCount >= TURBINE_ZERO_SAMPLES) {
+          zeroP1 = zeroSumP1 / TURBINE_ZERO_SAMPLES;
+          zeroP2 = zeroSumP2 / TURBINE_ZERO_SAMPLES;
+          turbineZeroReady = true;
+        }
+      }
+    }
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  if (!turbineZeroReady) {
+    printCentered("ZEROING...", 0, 2);
+    printCentered(("P1: " + String(turbineP1, 2)).c_str(), 24, 2);
+    printCentered(("P2: " + String(turbineP2, 2)).c_str(), 46, 2);
+  } else {
+    printCentered("Zero set!", 0, 2);
+    display.setTextSize(1);
+    display.setCursor(0, 24);
+    display.print("P1_zero: ");
+    display.print(zeroP1, 2);
+    display.setCursor(0, 36);
+    display.print("P2_zero: ");
+    display.print(zeroP2, 2);
+    display.setCursor(0, 50);
+    display.print("Install turbine, press");
+  }
+  drawBatteryIndicator();
+  display.display();
+
+  if (turbineZeroReady && buttonPressed()) {
+    if (!sdAvailable) {
+      state = SD_ERROR;
+      return;
+    }
+    turbineFilename = getNextTurbineFilename();
+    logFile = SD.open(turbineFilename.c_str(), FILE_WRITE);
+    if (!logFile) {
+      state = SD_ERROR;
+      return;
+    }
+    logFile.println("timestamp_ms,P1_raw,P2_raw,dP,flow_hz,gen_freq_hz,voltage,R_load,current,power");
+    logFile.flush();
+    turbineRowCount = 0;
+    turbineLastDisplayMs = 0;
+    state = TURBINE_LOGGING;
+  }
+}
+
+void turbineLoggingScreen() {
+  String line;
+  while (readSerial1Line(line)) {
+    if (!parseTurbineLine(line)) continue;
+
+    float dP = (turbineP1 - zeroP1) - (turbineP2 - zeroP2);
+    logFile.print(millis());
+    logFile.print(",");
+    logFile.print(turbineP1, 3);
+    logFile.print(",");
+    logFile.print(turbineP2, 3);
+    logFile.print(",");
+    logFile.print(dP, 3);
+    logFile.print(",");
+    logFile.print(turbineFlowHz, 3);
+    logFile.print(",");
+    logFile.print(turbineGenFreqHz, 3);
+    logFile.print(",");
+    logFile.print(turbineVoltage, 3);
+    logFile.print(",");
+    if (turbineRLoad >= 0) logFile.print(turbineRLoad, 3);
+    logFile.print(",");
+    if (turbineCurrent >= 0) logFile.print(turbineCurrent, 3);
+    logFile.print(",");
+    if (turbinePower >= 0) logFile.print(turbinePower, 3);
+    logFile.println();
+    turbineRowCount++;
+  }
+
+  if (millis() - turbineLastDisplayMs >= TURBINE_DISPLAY_INTERVAL_MS) {
+    turbineLastDisplayMs = millis();
+    float dP = (turbineP1 - zeroP1) - (turbineP2 - zeroP2);
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("dP: ");
+    display.print(dP, 1);
+    display.print(" PSI");
+    display.setCursor(0, 14);
+    display.print("Q:");
+    display.print(turbineFlowHz, 1);
+    display.print("Hz F:");
+    display.print(turbineGenFreqHz, 0);
+    display.print("Hz");
+    display.setCursor(0, 28);
+    display.print("V:");
+    display.print(turbineVoltage, 1);
+    display.print("V P:");
+    if (turbinePower >= 0) {
+      display.print(turbinePower, 0);
+      display.print("mW");
+    } else {
+      display.print("--");
+    }
+    display.setCursor(0, 42);
+    display.print(turbineRowCount);
+    display.print(" Press:stop");
+    drawBatteryIndicator();
+    display.display();
+  }
+
+  if (buttonPressed()) {
+    if (logFile) {
+      logFile.flush();
+      logFile.close();
+    }
+    state = TURBINE_DONE;
+  }
+}
+
+void turbineDoneScreen() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("TEST COMPLETE", 0, 2);
+  display.setTextSize(1);
+  display.setCursor(0, 24);
+  display.print("Rows: ");
+  display.print(turbineRowCount);
+  display.setCursor(0, 36);
+  display.print("File: ");
+  display.print(turbineFilename);
+  display.setCursor(0, 52);
+  display.print("Press: menu");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    state = MENU;
+    menuEncoderBase = knob.read();
+  }
+}
 
 // ---- Battery Functions ----
 float readRawBatteryVoltage() {
@@ -372,6 +649,8 @@ void menuScreen() {
       knob.write(encoderPos);
     } else if (menuIndex == 2) {
       state = SENSOR_MODE;
+    } else if (menuIndex == 3) {
+      state = TURBINE_IDLE;
     }
   }
 }
@@ -668,5 +947,9 @@ void loop() {
     case CHECK_TEST_WAIT: checkTestWait(); break;
     case CHECK_TEST_ENTRY: checkTestEntry(); break;
     case CHECK_TEST_DONE: checkTestDone(); break;
+    case TURBINE_IDLE: turbineIdleScreen(); break;
+    case TURBINE_ZEROING: turbineZeroingScreen(); break;
+    case TURBINE_LOGGING: turbineLoggingScreen(); break;
+    case TURBINE_DONE: turbineDoneScreen(); break;
   }
 }

@@ -11,6 +11,7 @@
   - **Check Test Mode:** Guided logging for multiple valves and tests, loaded from SD card configuration.
   - **Basic Mode:** Manual entry of values in a table format.
   - **Sensor Mode:** Automated sensor value logging (customizable).
+  - **Turbine Bench:** Guided zeroing + serial CSV ingest from a turbine bench controller, logged to per-test SD files.
 - **SD Card Logging:** Data saved in CSV format, readable by spreadsheet software.
 - **Battery Percentage Reader (UI):** Always visible in the corner of the screen. Battery voltage sensing can be enabled or disabled in hardware/software.
 - **Undo Last Log:** Double-click encoder to undo the last entry.
