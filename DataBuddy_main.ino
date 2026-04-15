@@ -195,8 +195,9 @@ bool parseFloatField(const String& field, float& outValue) {
 }
 
 bool isAllDigits(const String& text) {
-  if (text.length() == 0) return false;
-  for (int i = 0; i < text.length(); i++) {
+  int len = text.length();
+  if (len == 0) return false;
+  for (int i = 0; i < len; i++) {
     if (!isDigit(text.charAt(i))) return false;
   }
   return true;
@@ -272,7 +273,10 @@ String getNextTurbineFilename() {
   root.close();
 
   char filename[20];
-  if (maxIndex >= 9999) return "";
+  if (maxIndex >= 9999) {
+    Serial.println("Turbine file index limit reached (9999).");
+    return "";
+  }
   int nextIndex = maxIndex + 1;
   snprintf(filename, sizeof(filename), "turbine_%04d.csv", nextIndex);
   return String(filename);
@@ -367,6 +371,7 @@ void turbineLoggingScreen() {
   while (readSerial1Line(line)) {
     if (!parseTurbineLine(line)) continue;
 
+    // Incoming pressure stream is expected in PSI.
     float dP = (turbineP1 - zeroP1) - (turbineP2 - zeroP2);
     logFile.print(millis());
     logFile.print(",");
