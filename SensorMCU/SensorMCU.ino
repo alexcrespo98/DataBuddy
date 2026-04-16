@@ -23,6 +23,7 @@ static const uint8_t MODE_BUTTON_PIN = 4; // Nano ESP32 D4, momentary to GND
 static const uint32_t UART_BAUD = 115200;
 static const uint32_t SAMPLE_INTERVAL_MS = 100; // ~10 Hz
 static const uint32_t DISPLAY_INTERVAL_MS = 200; // 5 Hz
+static const uint32_t DEBOUNCE_DELAY_MS = 40;
 
 Adafruit_ADS1115 ads;
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
@@ -67,7 +68,7 @@ void IRAM_ATTR onGenPulse() {
 
 void handleModeButton() {
   bool currentState = digitalRead(MODE_BUTTON_PIN);
-  if (currentState != lastButtonState && (millis() - lastButtonEdgeMs) > 40) {
+  if (currentState != lastButtonState && (millis() - lastButtonEdgeMs) > DEBOUNCE_DELAY_MS) {
     lastButtonEdgeMs = millis();
     lastButtonState = currentState;
     if (currentState == LOW) {
@@ -182,8 +183,8 @@ void setup() {
   if (!adsReady) {
     Serial.println("ERROR: ADS1115 not found at 0x48");
   } else {
-    // ±6.144V range (0.1875mV/bit) to accommodate 0-5V sensor outputs/divider.
-    ads.setGain(GAIN_TWOTHIRDS);
+  // ±6.144V range; ADS1115 LSB size is 0.1875mV at this gain.
+  ads.setGain(GAIN_TWOTHIRDS);
   }
 
   displayReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -234,9 +235,13 @@ void loop() {
   genCountSnapshot = genPulseCount;
   interrupts();
 
-  float dt = elapsedMs / 1000.0f;
-  flowHz = dt > 0.0f ? (flowCountSnapshot - lastFlowCount) / dt : 0.0f;
-  genFreqHz = dt > 0.0f ? (genCountSnapshot - lastGenCount) / dt : 0.0f;
+  float dt = ((float)elapsedMs) / 1000.0f;
+  if (dt <= 0.0f) {
+    lastSampleMs = now;
+    return;
+  }
+  flowHz = (flowCountSnapshot - lastFlowCount) / dt;
+  genFreqHz = (genCountSnapshot - lastGenCount) / dt;
 
   lastFlowCount = flowCountSnapshot;
   lastGenCount = genCountSnapshot;

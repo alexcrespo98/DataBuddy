@@ -60,7 +60,7 @@ Generator branch:
 - Pin 4 (Brown): +5V
 - Pin 3 (Green): GND
 - Pin 2 (White): Analog signal (to ADS1115 A0/A1)
-- Pin 1 (Yellow): Temperature output (unused in this firmware)
+- Pin 1 (Yellow): Temperature output (currently unused by both SensorMCU and DataBuddy firmware paths)
 
 ### Allegro A1220 flow pickup
 - VCC
@@ -82,6 +82,7 @@ Generator branch:
 
 - Nano ESP32 UART TX (`Serial1 TX`) → Teensy 3.6 `Serial1 RX`
 - Shared GND required between Nano and Teensy
+- UART baud rate used by current SensorMCU sketch: `115200`
 - CSV stream format:
   `P1_voltage,P2_voltage,flow_hz,gen_freq_hz,dc_voltage`
 

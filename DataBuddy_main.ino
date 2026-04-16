@@ -23,6 +23,7 @@ Encoder knob(ENCODER_DT, ENCODER_CLK);
 #define BAT_VOLTAGE_EMPTY 3.0
 #define BATTERY_SAMPLES 10
 #define BATTERY_UPDATE_THRESHOLD 2
+// Set true only when battery divider hardware is actually connected.
 bool usingBattery = false;
 
 float batterySamples[BATTERY_SAMPLES];
@@ -859,6 +860,7 @@ void turbineFindMinFlowScreen() {
     // Columns: time, flow[GPM], R[ohm], V[V], I[A]=V/R, P_elec[W]=V^2/R,
     //          dP_raw[PSI], dP_baseline[PSI], dP_corrected[PSI],
     //          flow[m^3/s], dP[Pa], P_hydro[W]=Q*dP
+    // gen_freq_hz = generator electrical frequency measured from the optocoupler pulse stream.
     turbTestFile.println("timestamp_ms,flow_gpm,gen_freq_hz,R_ohm,V_gen_V,I_calc_A,P_elec_W,"
                          "dP_raw_PSI,dP_baseline_PSI,dP_corrected_PSI,"
                          "flow_m3s,dP_Pa,P_hydro_W");
@@ -918,7 +920,7 @@ void turbineSweepingScreen() {
   display.setCursor(0, 40);
   display.print("dP:");
   display.print(dpCorrected, 2);
-  display.print("psi");
+  display.print("PSI");
   display.setCursor(0, 50);
   display.print("Q:");
   display.print(currentFlow, 2);
@@ -1212,7 +1214,7 @@ void turbineLoggingScreen() {
     display.setCursor(0, 0);
     display.print("dP: ");
     display.print(dP, 1);
-    display.print("psi");
+    display.print("PSI");
     display.setCursor(0, 12);
     display.print("Q:");
     display.print(turbineFlowHz, 1);
@@ -1552,7 +1554,6 @@ void checkTestInit() {
   printCentered(("Test: " + currentTest->testType).c_str(), 16, 1);
   printCentered(("Rows: " + String(numRows) + " Cols: " + String(numCols)).c_str(), 32, 1);
   printCentered(("Interval: " + String(timeBetweenRows,2) + " min").c_str(), 48, 1);
-  display.setTextSize(1);
   printCentered("Press to begin!", 56, 1);
   drawBatteryIndicator();
   display.display();
