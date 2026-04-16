@@ -10,9 +10,9 @@
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-#define ENCODER_DT 2
-#define ENCODER_CLK 3
-#define ENCODER_SW 4
+#define ENCODER_SW 2
+#define ENCODER_DT 3
+#define ENCODER_CLK 4
 Encoder knob(ENCODER_DT, ENCODER_CLK);
 
 // --- BATTERY MONITOR ---
@@ -23,6 +23,7 @@ Encoder knob(ENCODER_DT, ENCODER_CLK);
 #define BAT_VOLTAGE_EMPTY 3.0
 #define BATTERY_SAMPLES 10
 #define BATTERY_UPDATE_THRESHOLD 2
+bool usingBattery = false;
 
 float batterySamples[BATTERY_SAMPLES];
 int batterySampleIndex = 0;
@@ -642,28 +643,28 @@ void turbineCalibAcquireScreen() {
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  printCentered("RECORDING...", 0, 1);
+  printCentered("CAL RECORDING", 0, 1);
   display.setTextSize(1);
-  display.setCursor(0, 14);
-  display.print("Target: ");
-  display.print(calibTargetGPM[calibStep], 1);
-  display.print(" GPM (");
+  display.setCursor(0, 12);
+  display.print("Pt ");
   display.print(calibStep + 1);
   display.print("/");
   display.print(NUM_CALIB_PTS);
-  display.print(")");
-  display.setCursor(0, 26);
-  display.print("Actual: ");
+  display.print(" Tgt:");
+  display.print(calibTargetGPM[calibStep], 1);
+  display.print("GPM");
+  display.setCursor(0, 24);
+  display.print("ActQ: ");
   display.print(currentFlow, 2);
   display.print(" GPM");
-  display.setCursor(0, 38);
+  display.setCursor(0, 36);
   display.print("dP avg: ");
   display.print(currentDp, 4);
   display.print(" PSI");
-  display.setCursor(0, 50);
-  display.print("Time left: ");
+  display.setCursor(0, 48);
+  display.print("Time: ");
   display.print(remaining, 1);
-  display.print(" s");
+  display.print("s");
   drawBatteryIndicator();
   display.display();
 
@@ -858,7 +859,7 @@ void turbineFindMinFlowScreen() {
     // Columns: time, flow[GPM], R[ohm], V[V], I[A]=V/R, P_elec[W]=V^2/R,
     //          dP_raw[PSI], dP_baseline[PSI], dP_corrected[PSI],
     //          flow[m^3/s], dP[Pa], P_hydro[W]=Q*dP
-    turbTestFile.println("timestamp_ms,flow_gpm,R_ohm,V_gen_V,I_calc_A,P_elec_W,"
+    turbTestFile.println("timestamp_ms,flow_gpm,gen_freq_hz,R_ohm,V_gen_V,I_calc_A,P_elec_W,"
                          "dP_raw_PSI,dP_baseline_PSI,dP_corrected_PSI,"
                          "flow_m3s,dP_Pa,P_hydro_W");
     turbTestFile.flush();
@@ -892,34 +893,36 @@ void turbineSweepingScreen() {
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.print("SWEEP @");
+  display.print("SWP ");
   display.print(targetFlow, 1);
-  display.print("GPM  R:");
+  display.print("G R");
   display.print(sweepRIdx + 1);
   display.print("/");
   display.print(NUM_SWEEP_R);
   display.setCursor(0, 10);
-  display.print("Set DL24 CR=");
+  display.print("Set CR=");
   display.print(currentR, 0);
-  display.print(" ohm");
-  display.setCursor(0, 22);
+  display.print("ohm");
+  display.setCursor(0, 20);
   display.print("V:");
   display.print(v, 2);
-  display.print("V  I:");
+  display.print(" I:");
   display.print(iCalc, 3);
-  display.print("A  P:");
+  display.print("A");
+  display.setCursor(0, 30);
+  display.print("Pe:");
   display.print(pElec * 1000.0f, 0);
-  display.print("mW");
-  display.setCursor(0, 34);
+  display.print("mW Gf:");
+  display.print(turbineGenFreqHz, 1);
+  display.print("Hz");
+  display.setCursor(0, 40);
   display.print("dP:");
-  display.print(dpCorrected, 3);
-  display.print(" PSI");
-  display.setCursor(0, 46);
+  display.print(dpCorrected, 2);
+  display.print("psi");
+  display.setCursor(0, 50);
   display.print("Q:");
   display.print(currentFlow, 2);
-  display.print(" GPM");
-  display.setCursor(0, 56);
-  display.print("Press: log & next R");
+  display.print("GPM  Press:log");
   drawBatteryIndicator();
   display.display();
 
@@ -927,6 +930,7 @@ void turbineSweepingScreen() {
     // Log data point
     turbTestFile.print(millis());       turbTestFile.print(",");
     turbTestFile.print(currentFlow, 4); turbTestFile.print(",");
+    turbTestFile.print(turbineGenFreqHz, 4); turbTestFile.print(",");
     turbTestFile.print(currentR, 1);    turbTestFile.print(",");
     turbTestFile.print(v, 4);           turbTestFile.print(",");
     turbTestFile.print(iCalc, 5);       turbTestFile.print(",");
@@ -1208,26 +1212,28 @@ void turbineLoggingScreen() {
     display.setCursor(0, 0);
     display.print("dP: ");
     display.print(dP, 1);
-    display.print(" PSI");
-    display.setCursor(0, 14);
+    display.print("psi");
+    display.setCursor(0, 12);
     display.print("Q:");
     display.print(turbineFlowHz, 1);
-    display.print("Hz F:");
+    display.print("Hz G:");
     display.print(turbineGenFreqHz, 0);
     display.print("Hz");
-    display.setCursor(0, 28);
+    display.setCursor(0, 24);
     display.print("V:");
     display.print(turbineVoltage, 1);
-    display.print("V P:");
+    display.print("V Pe:");
     if (turbinePower >= 0) {
       display.print(turbinePower, 0);
       display.print("mW");
     } else {
       display.print("--");
     }
-    display.setCursor(0, 42);
+    display.setCursor(0, 36);
+    display.print("Rows: ");
     display.print(turbineRowCount);
-    display.print(" Press:stop");
+    display.setCursor(0, 48);
+    display.print("Press: stop");
     drawBatteryIndicator();
     display.display();
   }
@@ -1298,6 +1304,7 @@ int batteryPercent() {
 }
 
 void drawBatteryIndicator() {
+  if (!usingBattery) return;
   int percent = batteryPercent();
   if (lastDisplayedPercent < 0 || (percent >= 0 && abs(percent - lastDisplayedPercent) > BATTERY_UPDATE_THRESHOLD)) {
     lastDisplayedPercent = percent;
@@ -1545,8 +1552,8 @@ void checkTestInit() {
   printCentered(("Test: " + currentTest->testType).c_str(), 16, 1);
   printCentered(("Rows: " + String(numRows) + " Cols: " + String(numCols)).c_str(), 32, 1);
   printCentered(("Interval: " + String(timeBetweenRows,2) + " min").c_str(), 48, 1);
-  display.setTextSize(2);
-  printCentered("Press to begin!", 56, 2);
+  display.setTextSize(1);
+  printCentered("Press to begin!", 56, 1);
   drawBatteryIndicator();
   display.display();
 
@@ -1729,7 +1736,9 @@ void setup() {
   } else {
     Serial.println("SD card initialized and available.");
   }
-  for(int i=0;i<BATTERY_SAMPLES;i++) updateBatteryBuffer();
+  if (usingBattery) {
+    for(int i=0;i<BATTERY_SAMPLES;i++) updateBatteryBuffer();
+  }
   for(int i=0;i<10;i++) lastManualValues[i] = 0.0;
   encoderPos = knob.read();
   lastEncoderPos = encoderPos;
@@ -1737,7 +1746,7 @@ void setup() {
 }
 
 void loop() {
-  updateBatteryBuffer();
+  if (usingBattery) updateBatteryBuffer();
   switch (state) {
     case MENU: menuScreen(); break;
     case CONFIG_ROWS: /* unchanged */ break;
