@@ -1,0 +1,7 @@
+# DataBuddy Turbine Configuration v1
+# Place this file on the SD card root.
+# Format: ID,Name,Type
+# ID: single capital letter used to label log files
+# Name: display name (keep short for OLED — 10 chars max)
+# Type: turbine type descriptor (Pelton, Kaplan, etc.)
+A,GEMS FT100,Pelton

@@ -161,7 +161,20 @@ enum State {
   TURBINE_IDLE,
   TURBINE_ZEROING,
   TURBINE_LOGGING,
-  TURBINE_DONE
+  TURBINE_DONE,
+  // Extended turbine bench workflow (v2)
+  TURBINE_SELECT_FLOWMETER,
+  TURBINE_CALIB_CHOICE,
+  TURBINE_CALIB_SETFLOW,
+  TURBINE_CALIB_ACQUIRE,
+  TURBINE_CALIB_HIGHFLOW,
+  TURBINE_SELECT_TURBINE,
+  TURBINE_UNLISTED_ID,
+  TURBINE_FIND_MIN_FLOW,
+  TURBINE_SWEEPING,
+  TURBINE_NEXT_FLOW,
+  TURBINE_SAVING,
+  TURBINE_ASK_ANOTHER
 };
 State state = MENU;
 
@@ -188,6 +201,68 @@ int zeroSampleCount = 0;
 bool turbineZeroReady = false;
 unsigned long turbineLastDisplayMs = 0;
 unsigned long turbineRowCount = 0;
+
+// ---- Extended Turbine Bench (v2) ----
+
+// Flow meter list (read from flowmeters.txt on SD)
+#define MAX_FLOWMETERS 8
+struct FlowMeterConfig {
+  String name;
+  float kHzPerGPM; // Q[GPM] = flow_hz / kHzPerGPM
+};
+FlowMeterConfig flowMeters[MAX_FLOWMETERS];
+int numFlowMeters = 0;
+int selectedFlowMeterIdx = 0;
+
+// Turbine list (read from turbines.rxr on SD)
+#define MAX_TURBINE_ENTRIES 8
+struct TurbineEntry {
+  char id;
+  String name;
+  String type;
+};
+TurbineEntry turbineEntries[MAX_TURBINE_ENTRIES];
+int numTurbineEntries = 0;
+int selectedTurbineEntryIdx = 0;
+String turbineTestName = "";
+char turbineTestId = '?';
+
+// Pressure calibration curve (baseline dP with NO turbine installed)
+#define NUM_CALIB_PTS 8
+const float calibTargetGPM[NUM_CALIB_PTS] = {0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f};
+float calibDpPSI[NUM_CALIB_PTS] = {0};
+bool calibValid = false;
+int calibStep = 0;
+float calibAccumDp = 0;
+int calibAccumCount = 0;
+unsigned long calibStepStart = 0;
+const unsigned long CALIB_SAMPLE_MS = 10000; // 10 s per flow point
+
+// Resistance sweep (user sets each value on DL24, DataBuddy reads V and logs)
+const float SWEEP_R_OHMS[] = {1.0f, 2.0f, 5.0f, 10.0f, 20.0f, 50.0f, 100.0f,
+                               200.0f, 500.0f, 1000.0f, 2000.0f};
+const int NUM_SWEEP_R = 11;
+int sweepRIdx = 0;
+float sweepBestR = -1.0f;
+float sweepBestPower = 0.0f;
+
+// Test flow-rate sequence
+const float TEST_FLOW_GPM[] = {0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f};
+const int NUM_TEST_FLOWS = 8;
+int testFlowIdx = 0;
+float turbineMinFlowGPM = 0.0f;
+
+// Turbine test log file (separate from old turbine_NNNN files)
+File turbTestFile;
+String turbTestFilename = "";
+unsigned long turbTestRows = 0;
+
+// Shared encoder base for turbine sub-menu screens
+long turbEncoderBase = 0;
+
+// Reusable choice state for two-option menus (avoids static locals)
+int turbMenuChoice = 0;
+
 
 bool parseFloatField(const String& field, float& outValue) {
   char* endPtr = nullptr;
@@ -283,6 +358,702 @@ String getNextTurbineFilename() {
   return String(filename);
 }
 
+// ---- Extended Turbine Bench helpers (v2) ----
+
+void readFlowMeters() {
+  numFlowMeters = 0;
+  File f = SD.open("flowmeters.txt", FILE_READ);
+  if (!f) return;
+  while (f.available() && numFlowMeters < MAX_FLOWMETERS) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0 || line.charAt(0) == '#') continue;
+    int comma = line.indexOf(',');
+    if (comma < 0) continue;
+    float k = line.substring(comma + 1).toFloat();
+    if (k <= 0) continue;
+    flowMeters[numFlowMeters].name = line.substring(0, comma);
+    flowMeters[numFlowMeters].kHzPerGPM = k;
+    numFlowMeters++;
+  }
+  f.close();
+}
+
+void readTurbineList() {
+  numTurbineEntries = 0;
+  File f = SD.open("turbines.rxr", FILE_READ);
+  if (f) {
+    while (f.available() && numTurbineEntries < MAX_TURBINE_ENTRIES - 1) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0 || line.charAt(0) == '#') continue;
+      int c1 = line.indexOf(',');
+      int c2 = (c1 >= 0) ? line.indexOf(',', c1 + 1) : -1;
+      if (c1 < 0) continue;
+      turbineEntries[numTurbineEntries].id = line.charAt(0);
+      turbineEntries[numTurbineEntries].name = line.substring(c1 + 1, c2 > 0 ? c2 : line.length());
+      turbineEntries[numTurbineEntries].type = (c2 > 0) ? line.substring(c2 + 1) : "";
+      numTurbineEntries++;
+    }
+    f.close();
+  }
+  // Always append "Unlisted" option
+  turbineEntries[numTurbineEntries].id = '?';
+  turbineEntries[numTurbineEntries].name = "Unlisted";
+  turbineEntries[numTurbineEntries].type = "";
+  numTurbineEntries++;
+}
+
+bool loadCalibration() {
+  File f = SD.open("turb_cal.txt", FILE_READ);
+  if (!f) return false;
+  int count = 0;
+  while (f.available() && count < NUM_CALIB_PTS) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0 || line.charAt(0) == '#') continue;
+    int comma = line.indexOf(',');
+    if (comma < 0) continue;
+    calibDpPSI[count] = line.substring(comma + 1).toFloat();
+    count++;
+  }
+  f.close();
+  return (count == NUM_CALIB_PTS);
+}
+
+void saveCalibration() {
+  SD.remove("turb_cal.txt");
+  File f = SD.open("turb_cal.txt", FILE_WRITE);
+  if (!f) return;
+  f.println("# DataBuddy turbine bench baseline dP calibration");
+  f.println("# flow_gpm,dp_psi");
+  for (int i = 0; i < NUM_CALIB_PTS; i++) {
+    f.print(calibTargetGPM[i], 2);
+    f.print(",");
+    f.println(calibDpPSI[i], 5);
+  }
+  f.close();
+}
+
+float interpolateCalibDp(float flowGPM) {
+  if (flowGPM <= calibTargetGPM[0]) return calibDpPSI[0];
+  if (flowGPM >= calibTargetGPM[NUM_CALIB_PTS - 1]) return calibDpPSI[NUM_CALIB_PTS - 1];
+  for (int i = 0; i < NUM_CALIB_PTS - 1; i++) {
+    if (flowGPM <= calibTargetGPM[i + 1]) {
+      float t = (flowGPM - calibTargetGPM[i]) / (calibTargetGPM[i + 1] - calibTargetGPM[i]);
+      return calibDpPSI[i] + t * (calibDpPSI[i + 1] - calibDpPSI[i]);
+    }
+  }
+  return calibDpPSI[NUM_CALIB_PTS - 1];
+}
+
+float flowHzToGPM(float hz) {
+  if (numFlowMeters == 0 || selectedFlowMeterIdx >= numFlowMeters) return 0.0f;
+  float k = flowMeters[selectedFlowMeterIdx].kHzPerGPM;
+  return (k > 0) ? hz / k : 0.0f;
+}
+
+String getNextTurbTestFilename() {
+  int maxIndex = 0;
+  File root = SD.open("/");
+  if (!root) return "ttest_0001.csv";
+  while (true) {
+    File entry = root.openNextFile();
+    if (!entry) break;
+    if (!entry.isDirectory()) {
+      String lower = entry.name();
+      lower.toLowerCase();
+      if (lower.startsWith("ttest_") && lower.endsWith(".csv")) {
+        String numPart = lower.substring(6, lower.length() - 4);
+        if (numPart.length() == 4 && isAllDigits(numPart)) {
+          int idx = numPart.toInt();
+          if (idx > maxIndex) maxIndex = idx;
+        }
+      }
+    }
+    entry.close();
+  }
+  root.close();
+  if (maxIndex >= 9999) return "";
+  char filename[20];
+  snprintf(filename, sizeof(filename), "ttest_%04d.csv", maxIndex + 1);
+  return String(filename);
+}
+
+// ---- Extended Turbine Bench state handlers (v2) ----
+
+void turbineSelectFlowMeterScreen() {
+  long newPos = knob.read();
+  int delta = (newPos - turbEncoderBase) / menuEncoderDelay;
+  if (delta != 0 && numFlowMeters > 0) {
+    selectedFlowMeterIdx = (selectedFlowMeterIdx + delta + numFlowMeters) % numFlowMeters;
+    turbEncoderBase += delta * menuEncoderDelay;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Select flow meter:");
+  if (numFlowMeters > 0) {
+    display.setTextSize(2);
+    display.setCursor(0, 14);
+    display.print(flowMeters[selectedFlowMeterIdx].name);
+    display.setTextSize(1);
+    display.setCursor(0, 46);
+    display.print("K=");
+    display.print(flowMeters[selectedFlowMeterIdx].kHzPerGPM, 1);
+    display.print(" Hz/GPM");
+  } else {
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.print("No flowmeters.txt!");
+    display.setCursor(0, 32);
+    display.print("Add file to SD card.");
+  }
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("Press to select");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    if (numFlowMeters == 0) return;
+    bool hasCalib = loadCalibration();
+    calibValid = hasCalib;
+    turbMenuChoice = 0;
+    turbEncoderBase = knob.read();
+    state = TURBINE_CALIB_CHOICE;
+  }
+}
+
+void turbineCalibChoiceScreen() {
+  if (!calibValid) {
+    // No stored calibration — skip the choice and go straight to calibration
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    printCentered("No stored cal", 0, 1);
+    display.setTextSize(1);
+    display.setCursor(0, 14);
+    display.print("Remove turbine from");
+    display.setCursor(0, 24);
+    display.print("the line, then press");
+    display.setCursor(0, 34);
+    display.print("to begin calibration.");
+    drawBatteryIndicator();
+    display.display();
+    if (buttonPressed()) {
+      calibStep = 0;
+      calibAccumDp = 0;
+      calibAccumCount = 0;
+      state = TURBINE_CALIB_SETFLOW;
+    }
+    return;
+  }
+
+  long newPos = knob.read();
+  int delta = (newPos - turbEncoderBase) / menuEncoderDelay;
+  if (delta != 0) {
+    turbMenuChoice = (turbMenuChoice + delta + 2) % 2;
+    turbEncoderBase += delta * menuEncoderDelay;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("Pressure Cal", 0, 1);
+  display.setTextSize(1);
+  display.setCursor(0, 14);
+  display.print(turbMenuChoice == 0 ? "> Use stored cal" : "  Use stored cal");
+  display.setCursor(0, 26);
+  display.print(turbMenuChoice == 1 ? "> Recalibrate" : "  Recalibrate");
+  display.setCursor(0, 50);
+  display.print("Press to confirm");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    if (turbMenuChoice == 1) {
+      calibStep = 0;
+      calibAccumDp = 0;
+      calibAccumCount = 0;
+      state = TURBINE_CALIB_SETFLOW;
+    } else {
+      readTurbineList();
+      selectedTurbineEntryIdx = 0;
+      turbEncoderBase = knob.read();
+      state = TURBINE_SELECT_TURBINE;
+    }
+    turbMenuChoice = 0;
+  }
+}
+
+void turbineCalibSetFlowScreen() {
+  String line;
+  while (readSerial1Line(line)) parseTurbineLine(line);
+
+  float currentFlow = flowHzToGPM(turbineFlowHz);
+  float target = calibTargetGPM[calibStep];
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("CALIBRATE", 0, 2);
+  display.setTextSize(1);
+  display.setCursor(0, 18);
+  display.print("No turbine in line!");
+  display.setCursor(0, 28);
+  display.print("Set flow to:");
+  display.setTextSize(2);
+  display.setCursor(0, 38);
+  display.print(target, 1);
+  display.print(" GPM");
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("Now:");
+  display.print(currentFlow, 2);
+  display.print(" - Press OK");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    calibAccumDp = 0;
+    calibAccumCount = 0;
+    calibStepStart = millis();
+    state = TURBINE_CALIB_ACQUIRE;
+  }
+}
+
+void turbineCalibAcquireScreen() {
+  String line;
+  while (readSerial1Line(line)) {
+    if (parseTurbineLine(line)) {
+      calibAccumDp += (turbineP1 - turbineP2);
+      calibAccumCount++;
+    }
+  }
+
+  unsigned long elapsed = millis() - calibStepStart;
+  float remaining = (float)(CALIB_SAMPLE_MS - min(elapsed, CALIB_SAMPLE_MS)) / 1000.0f;
+  float currentDp = (calibAccumCount > 0) ? (calibAccumDp / calibAccumCount) : 0.0f;
+  float currentFlow = flowHzToGPM(turbineFlowHz);
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("RECORDING...", 0, 1);
+  display.setTextSize(1);
+  display.setCursor(0, 14);
+  display.print("Target: ");
+  display.print(calibTargetGPM[calibStep], 1);
+  display.print(" GPM (");
+  display.print(calibStep + 1);
+  display.print("/");
+  display.print(NUM_CALIB_PTS);
+  display.print(")");
+  display.setCursor(0, 26);
+  display.print("Actual: ");
+  display.print(currentFlow, 2);
+  display.print(" GPM");
+  display.setCursor(0, 38);
+  display.print("dP avg: ");
+  display.print(currentDp, 4);
+  display.print(" PSI");
+  display.setCursor(0, 50);
+  display.print("Time left: ");
+  display.print(remaining, 1);
+  display.print(" s");
+  drawBatteryIndicator();
+  display.display();
+
+  if (elapsed >= CALIB_SAMPLE_MS) {
+    calibDpPSI[calibStep] = (calibAccumCount > 0) ? (calibAccumDp / calibAccumCount) : 0.0f;
+    calibStep++;
+    if (calibStep >= NUM_CALIB_PTS) {
+      turbMenuChoice = 0;
+      turbEncoderBase = knob.read();
+      state = TURBINE_CALIB_HIGHFLOW;
+    } else {
+      state = TURBINE_CALIB_SETFLOW;
+    }
+    calibAccumDp = 0;
+    calibAccumCount = 0;
+  }
+}
+
+void turbineCalibHighFlowScreen() {
+  long newPos = knob.read();
+  int delta = (newPos - turbEncoderBase) / menuEncoderDelay;
+  if (delta != 0) {
+    turbMenuChoice = (turbMenuChoice + delta + 2) % 2;
+    turbEncoderBase += delta * menuEncoderDelay;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("Cal done!", 0, 1);
+  display.setTextSize(1);
+  display.setCursor(0, 12);
+  display.print("8 points recorded.");
+  display.setCursor(0, 24);
+  display.print("Continue >4 GPM?");
+  display.setCursor(0, 36);
+  display.print(turbMenuChoice == 0 ? "> No (save & go)" : "  No (save & go)");
+  display.setCursor(0, 48);
+  display.print(turbMenuChoice == 1 ? "> Yes (TBD)" : "  Yes (TBD)");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    // High-flow extension (choice == 1) is reserved for a future firmware update.
+    saveCalibration();
+    calibValid = true;
+    readTurbineList();
+    selectedTurbineEntryIdx = 0;
+    turbEncoderBase = knob.read();
+    state = TURBINE_SELECT_TURBINE;
+    turbMenuChoice = 0;
+  }
+}
+
+void turbineSelectTurbineScreen() {
+  long newPos = knob.read();
+  int delta = (newPos - turbEncoderBase) / menuEncoderDelay;
+  if (delta != 0 && numTurbineEntries > 0) {
+    selectedTurbineEntryIdx = (selectedTurbineEntryIdx + delta + numTurbineEntries) % numTurbineEntries;
+    turbEncoderBase += delta * menuEncoderDelay;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Select turbine:");
+  if (numTurbineEntries > 0) {
+    String tname = turbineEntries[selectedTurbineEntryIdx].name;
+    if (tname.length() > 10) {
+      display.setTextSize(1);
+      display.setCursor(0, 14);
+    } else {
+      display.setTextSize(2);
+      display.setCursor(0, 14);
+    }
+    display.print(tname);
+    display.setTextSize(1);
+    display.setCursor(0, 44);
+    display.print("Type: ");
+    display.print(turbineEntries[selectedTurbineEntryIdx].type);
+  } else {
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.print("No turbines.rxr!");
+  }
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("Press to select");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    if (numTurbineEntries == 0) return;
+    turbineTestId = turbineEntries[selectedTurbineEntryIdx].id;
+    turbineTestName = turbineEntries[selectedTurbineEntryIdx].name;
+    if (turbineTestId == '?') {
+      turbineTestId = 'A'; // default starting letter for unlisted
+      turbEncoderBase = knob.read();
+      state = TURBINE_UNLISTED_ID;
+    } else {
+      state = TURBINE_FIND_MIN_FLOW;
+    }
+  }
+}
+
+void turbineUnlistedIdScreen() {
+  long newPos = knob.read();
+  int delta = (newPos - turbEncoderBase) / menuEncoderDelay;
+  if (delta != 0) {
+    int letter = turbineTestId;
+    letter = ((letter - 'A') + delta + 26) % 26 + 'A';
+    turbineTestId = (char)letter;
+    turbEncoderBase += delta * menuEncoderDelay;
+  }
+
+  char idStr[2] = {turbineTestId, '\0'};
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("Unlisted Turbine", 0, 1);
+  display.setTextSize(1);
+  display.setCursor(0, 14);
+  display.print("Assign a letter ID:");
+  display.setTextSize(3);
+  printCentered(idStr, 26, 3);
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("Press to confirm");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    turbineTestName = String("Turbine-") + turbineTestId;
+    state = TURBINE_FIND_MIN_FLOW;
+  }
+}
+
+void turbineFindMinFlowScreen() {
+  String line;
+  while (readSerial1Line(line)) parseTurbineLine(line);
+
+  float currentFlow = flowHzToGPM(turbineFlowHz);
+  bool generating = (turbineVoltage > 0.05f); // >50 mV = turbine spinning
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  printCentered("FIND MIN FLOW", 0, 1);
+  display.setCursor(0, 12);
+  display.print("Install turbine!");
+  display.setCursor(0, 22);
+  display.print("Stop flow, then slowly");
+  display.setCursor(0, 32);
+  display.print("increase until stopped.");
+  display.setCursor(0, 44);
+  display.print("Q:");
+  display.print(currentFlow, 2);
+  display.print(" GPM  V:");
+  display.print(turbineVoltage, 2);
+  if (generating) {
+    display.setTextSize(2);
+    printCentered(">> STOP! <<", 52, 2);
+    turbineMinFlowGPM = currentFlow;
+  } else {
+    display.setTextSize(1);
+    display.setCursor(0, 56);
+    display.print("Waiting for voltage...");
+  }
+  drawBatteryIndicator();
+  display.display();
+
+  // Press button once turbine is generating to mark min flow and start test
+  if (generating && buttonPressed()) {
+    turbineMinFlowGPM = currentFlow;
+    turbTestFilename = getNextTurbTestFilename();
+    if (turbTestFilename.length() == 0 || !sdAvailable) {
+      state = SD_ERROR;
+      return;
+    }
+    turbTestFile = SD.open(turbTestFilename.c_str(), FILE_WRITE);
+    if (!turbTestFile) {
+      state = SD_ERROR;
+      return;
+    }
+    turbTestFile.print("# Turbine: ");
+    turbTestFile.println(turbineTestName);
+    turbTestFile.print("# ID: ");
+    turbTestFile.println(turbineTestId);
+    turbTestFile.print("# Flow meter: ");
+    turbTestFile.println(numFlowMeters > 0 ? flowMeters[selectedFlowMeterIdx].name : "unknown");
+    turbTestFile.print("# Min start flow GPM: ");
+    turbTestFile.println(turbineMinFlowGPM, 3);
+    // Columns: time, flow[GPM], R[ohm], V[V], I[A]=V/R, P_elec[W]=V^2/R,
+    //          dP_raw[PSI], dP_baseline[PSI], dP_corrected[PSI],
+    //          flow[m^3/s], dP[Pa], P_hydro[W]=Q*dP
+    turbTestFile.println("timestamp_ms,flow_gpm,R_ohm,V_gen_V,I_calc_A,P_elec_W,"
+                         "dP_raw_PSI,dP_baseline_PSI,dP_corrected_PSI,"
+                         "flow_m3s,dP_Pa,P_hydro_W");
+    turbTestFile.flush();
+    turbTestRows = 0;
+    testFlowIdx = 0;
+    sweepRIdx = 0;
+    sweepBestR = -1.0f;
+    sweepBestPower = 0.0f;
+    state = TURBINE_SWEEPING;
+  }
+}
+
+void turbineSweepingScreen() {
+  String line;
+  while (readSerial1Line(line)) parseTurbineLine(line);
+
+  float currentFlow = flowHzToGPM(turbineFlowHz);
+  float targetFlow = TEST_FLOW_GPM[testFlowIdx];
+  float currentR = SWEEP_R_OHMS[sweepRIdx];
+  float v = turbineVoltage;
+  float iCalc = (currentR > 0) ? (v / currentR) : 0.0f;
+  float pElec = v * iCalc; // = V²/R  [W]
+  float dpRaw = turbineP1 - turbineP2;
+  float dpBaseline = calibValid ? interpolateCalibDp(currentFlow) : 0.0f;
+  float dpCorrected = dpRaw - dpBaseline;
+  float flowM3s = currentFlow * 6.30902e-5f; // GPM → m³/s
+  float dpPa = dpCorrected * 6894.76f;       // PSI → Pa
+  float pHydro = flowM3s * dpPa;             // hydraulic power [W]
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("SWEEP @");
+  display.print(targetFlow, 1);
+  display.print("GPM  R:");
+  display.print(sweepRIdx + 1);
+  display.print("/");
+  display.print(NUM_SWEEP_R);
+  display.setCursor(0, 10);
+  display.print("Set DL24 CR=");
+  display.print(currentR, 0);
+  display.print(" ohm");
+  display.setCursor(0, 22);
+  display.print("V:");
+  display.print(v, 2);
+  display.print("V  I:");
+  display.print(iCalc, 3);
+  display.print("A  P:");
+  display.print(pElec * 1000.0f, 0);
+  display.print("mW");
+  display.setCursor(0, 34);
+  display.print("dP:");
+  display.print(dpCorrected, 3);
+  display.print(" PSI");
+  display.setCursor(0, 46);
+  display.print("Q:");
+  display.print(currentFlow, 2);
+  display.print(" GPM");
+  display.setCursor(0, 56);
+  display.print("Press: log & next R");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    // Log data point
+    turbTestFile.print(millis());       turbTestFile.print(",");
+    turbTestFile.print(currentFlow, 4); turbTestFile.print(",");
+    turbTestFile.print(currentR, 1);    turbTestFile.print(",");
+    turbTestFile.print(v, 4);           turbTestFile.print(",");
+    turbTestFile.print(iCalc, 5);       turbTestFile.print(",");
+    turbTestFile.print(pElec, 5);       turbTestFile.print(",");
+    turbTestFile.print(dpRaw, 4);       turbTestFile.print(",");
+    turbTestFile.print(dpBaseline, 4);  turbTestFile.print(",");
+    turbTestFile.print(dpCorrected, 4); turbTestFile.print(",");
+    turbTestFile.print(flowM3s, 8);     turbTestFile.print(",");
+    turbTestFile.print(dpPa, 2);        turbTestFile.print(",");
+    turbTestFile.println(pHydro, 4);
+    turbTestRows++;
+    turbTestFile.flush();
+
+    if (pElec > sweepBestPower) {
+      sweepBestPower = pElec;
+      sweepBestR = currentR;
+    }
+
+    sweepRIdx++;
+    if (sweepRIdx >= NUM_SWEEP_R) {
+      // Finished sweep at this flow rate — advance to next flow
+      sweepRIdx = 0;
+      sweepBestR = -1.0f;
+      sweepBestPower = 0.0f;
+      testFlowIdx++;
+      if (testFlowIdx >= NUM_TEST_FLOWS) {
+        state = TURBINE_SAVING;
+      } else {
+        turbEncoderBase = knob.read();
+        state = TURBINE_NEXT_FLOW;
+      }
+    }
+  }
+}
+
+void turbineNextFlowScreen() {
+  String line;
+  while (readSerial1Line(line)) parseTurbineLine(line);
+
+  float currentFlow = flowHzToGPM(turbineFlowHz);
+  float target = TEST_FLOW_GPM[testFlowIdx];
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("NEXT FLOW", 0, 2);
+  display.setTextSize(1);
+  display.setCursor(0, 22);
+  display.print("Set flow to:");
+  display.setTextSize(2);
+  display.setCursor(0, 34);
+  display.print(target, 1);
+  display.print(" GPM");
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("Now:");
+  display.print(currentFlow, 2);
+  display.print("  Press OK");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    sweepRIdx = 0;
+    state = TURBINE_SWEEPING;
+  }
+}
+
+void turbineSavingScreen() {
+  if (turbTestFile) {
+    turbTestFile.flush();
+    turbTestFile.close();
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("Nice!", 0, 2);
+  display.setTextSize(1);
+  display.setCursor(0, 22);
+  display.print("Saving to microSD...");
+  display.setCursor(0, 34);
+  display.print("File: ");
+  display.print(turbTestFilename);
+  display.setCursor(0, 46);
+  display.print("Rows: ");
+  display.print(turbTestRows);
+  drawBatteryIndicator();
+  display.display();
+  delay(2500);
+  turbMenuChoice = 0;
+  turbEncoderBase = knob.read();
+  state = TURBINE_ASK_ANOTHER;
+}
+
+void turbineAskAnotherScreen() {
+  long newPos = knob.read();
+  int delta = (newPos - turbEncoderBase) / menuEncoderDelay;
+  if (delta != 0) {
+    turbMenuChoice = (turbMenuChoice + delta + 2) % 2;
+    turbEncoderBase += delta * menuEncoderDelay;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  printCentered("Test another?", 0, 1);
+  display.setTextSize(1);
+  display.setCursor(0, 14);
+  display.print("Test complete.");
+  display.setCursor(0, 26);
+  display.print(turbMenuChoice == 0 ? "> No (back to menu)" : "  No (back to menu)");
+  display.setCursor(0, 38);
+  display.print(turbMenuChoice == 1 ? "> Yes (same cal)" : "  Yes (same cal)");
+  display.setCursor(0, 56);
+  display.print("Press to confirm");
+  drawBatteryIndicator();
+  display.display();
+
+  if (buttonPressed()) {
+    if (turbMenuChoice == 1) {
+      // Re-use existing calibration; pick a new turbine
+      readTurbineList();
+      selectedTurbineEntryIdx = 0;
+      turbEncoderBase = knob.read();
+      state = TURBINE_SELECT_TURBINE;
+    } else {
+      state = MENU;
+      menuEncoderBase = knob.read();
+    }
+    turbMenuChoice = 0;
+  }
+}
+
+
 void resetTurbineZeroing() {
   zeroSumP1 = 0.0;
   zeroSumP2 = 0.0;
@@ -294,16 +1065,29 @@ void turbineIdleScreen() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   printCentered("TURBINE BENCH", 0, 2);
-  printCentered("Remove turbine", 22, 2);
-  printCentered("Set flow, press", 44, 2);
-  printCentered("to zero", 54, 1);
+  display.setTextSize(1);
+  printCentered("Pressure & power", 22, 1);
+  printCentered("test system v2", 32, 1);
+  printCentered("Press to begin", 48, 1);
   drawBatteryIndicator();
   display.display();
 
   if (buttonPressed()) {
-    resetTurbineZeroing();
-    turbineSerialBuffer = "";
-    state = TURBINE_ZEROING;
+    readFlowMeters();
+    selectedFlowMeterIdx = 0;
+    turbEncoderBase = knob.read();
+    if (numFlowMeters > 0) {
+      state = TURBINE_SELECT_FLOWMETER;
+    } else {
+      // No flowmeters.txt on SD — inform user and stay idle
+      display.clearDisplay();
+      display.setTextSize(1);
+      printCentered("No flowmeters.txt!", 16, 1);
+      printCentered("Add to SD root", 32, 1);
+      drawBatteryIndicator();
+      display.display();
+      delay(2500);
+    }
   }
 }
 
@@ -976,5 +1760,17 @@ void loop() {
     case TURBINE_ZEROING: turbineZeroingScreen(); break;
     case TURBINE_LOGGING: turbineLoggingScreen(); break;
     case TURBINE_DONE: turbineDoneScreen(); break;
+    case TURBINE_SELECT_FLOWMETER: turbineSelectFlowMeterScreen(); break;
+    case TURBINE_CALIB_CHOICE: turbineCalibChoiceScreen(); break;
+    case TURBINE_CALIB_SETFLOW: turbineCalibSetFlowScreen(); break;
+    case TURBINE_CALIB_ACQUIRE: turbineCalibAcquireScreen(); break;
+    case TURBINE_CALIB_HIGHFLOW: turbineCalibHighFlowScreen(); break;
+    case TURBINE_SELECT_TURBINE: turbineSelectTurbineScreen(); break;
+    case TURBINE_UNLISTED_ID: turbineUnlistedIdScreen(); break;
+    case TURBINE_FIND_MIN_FLOW: turbineFindMinFlowScreen(); break;
+    case TURBINE_SWEEPING: turbineSweepingScreen(); break;
+    case TURBINE_NEXT_FLOW: turbineNextFlowScreen(); break;
+    case TURBINE_SAVING: turbineSavingScreen(); break;
+    case TURBINE_ASK_ANOTHER: turbineAskAnotherScreen(); break;
   }
 }
