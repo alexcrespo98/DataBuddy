@@ -182,6 +182,11 @@ State state = MENU;
 const int TURBINE_ZERO_SAMPLES = 20;
 const unsigned long TURBINE_DISPLAY_INTERVAL_MS = 500;
 const int TURBINE_FLUSH_INTERVAL_ROWS = 25;
+// Turbine generator considered spinning once output exceeds this threshold
+static const float TURBINE_MIN_VOLTAGE_V = 0.05f; // 50 mV
+// Unit conversion constants
+static const float GPM_TO_M3S = 6.30902e-5f;  // 1 GPM = 6.30902e-5 m³/s
+static const float PSI_TO_PA  = 6894.76f;      // 1 PSI = 6894.76 Pa
 String turbineSerialBuffer = "";
 String turbineFilename = "";
 float turbineP1 = 0.0;
@@ -383,7 +388,7 @@ void readTurbineList() {
   numTurbineEntries = 0;
   File f = SD.open("turbines.rxr", FILE_READ);
   if (f) {
-    while (f.available() && numTurbineEntries < MAX_TURBINE_ENTRIES - 1) {
+    while (f.available() && numTurbineEntries < MAX_TURBINE_ENTRIES - 1) {  // -1 reserves slot for "Unlisted"
       String line = f.readStringUntil('\n');
       line.trim();
       if (line.length() == 0 || line.charAt(0) == '#') continue;
@@ -452,7 +457,6 @@ float flowHzToGPM(float hz) {
   float k = flowMeters[selectedFlowMeterIdx].kHzPerGPM;
   return (k > 0) ? hz / k : 0.0f;
 }
-
 String getNextTurbTestFilename() {
   int maxIndex = 0;
   File root = SD.open("/");
@@ -801,7 +805,7 @@ void turbineFindMinFlowScreen() {
   while (readSerial1Line(line)) parseTurbineLine(line);
 
   float currentFlow = flowHzToGPM(turbineFlowHz);
-  bool generating = (turbineVoltage > 0.05f); // >50 mV = turbine spinning
+  bool generating = (turbineVoltage > TURBINE_MIN_VOLTAGE_V);
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -880,9 +884,9 @@ void turbineSweepingScreen() {
   float dpRaw = turbineP1 - turbineP2;
   float dpBaseline = calibValid ? interpolateCalibDp(currentFlow) : 0.0f;
   float dpCorrected = dpRaw - dpBaseline;
-  float flowM3s = currentFlow * 6.30902e-5f; // GPM → m³/s
-  float dpPa = dpCorrected * 6894.76f;       // PSI → Pa
-  float pHydro = flowM3s * dpPa;             // hydraulic power [W]
+  float flowM3s = currentFlow * GPM_TO_M3S; // GPM → m³/s
+  float dpPa = dpCorrected * PSI_TO_PA;     // PSI → Pa
+  float pHydro = flowM3s * dpPa;            // hydraulic power [W]
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -990,9 +994,17 @@ void turbineNextFlowScreen() {
 }
 
 void turbineSavingScreen() {
-  if (turbTestFile) {
-    turbTestFile.flush();
-    turbTestFile.close();
+  static unsigned long savingEnteredMs = 0;
+  static bool fileClosed = false;
+
+  if (savingEnteredMs == 0) {
+    // First call: close file and record entry time
+    if (turbTestFile) {
+      turbTestFile.flush();
+      turbTestFile.close();
+    }
+    fileClosed = true;
+    savingEnteredMs = millis();
   }
 
   display.clearDisplay();
@@ -1009,10 +1021,14 @@ void turbineSavingScreen() {
   display.print(turbTestRows);
   drawBatteryIndicator();
   display.display();
-  delay(2500);
-  turbMenuChoice = 0;
-  turbEncoderBase = knob.read();
-  state = TURBINE_ASK_ANOTHER;
+
+  if (millis() - savingEnteredMs >= 2500UL) {
+    savingEnteredMs = 0;
+    fileClosed = false;
+    turbMenuChoice = 0;
+    turbEncoderBase = knob.read();
+    state = TURBINE_ASK_ANOTHER;
+  }
 }
 
 void turbineAskAnotherScreen() {

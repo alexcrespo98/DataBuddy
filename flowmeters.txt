@@ -2,7 +2,7 @@
 # Place this file on the SD card root.
 # Format: Name,K_HzPerGPM
 #   K factor: Q[GPM] = flow_hz / K
-#   For the GEMS FT-110 (1/4" line) the K factor is approximately
+#   For the GEMS FT100 (1/4" line) the K factor is approximately
 #   11.0 Hz/GPM — verify against your calibration certificate and
 #   update this value before testing.
 GEMS FT100,11.0
